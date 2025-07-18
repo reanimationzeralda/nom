@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitoring Hospitalisation - Réanimation</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        body {
+            background: linear-gradient(135deg, #0f1a3d, #1a2a6c);
+            color: #fff;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            text-align: center;
+            padding: 20px 0;
+            margin-bottom: 30px;
+        }
+        
+        .heading {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            color: #ffffff;
+        }
+        
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        
+        .patient-card {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 20px;
+            position: relative;
+            overflow: hidden;
+            border-left: 5px solid #4facfe;
+            transition: opacity 0.3s ease;
+        }
+        
+        .patient-card.enfant {
+            border-left-color: #a18cd1;
+        }
+        
+        .box-number {
+            font-size: 1.8rem;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        
+        .patient-name {
+            font-size: 1.4rem;
+            margin-bottom: 15px;
+            min-height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+        }
+        
+        .hospitalization-days {
+            font-size: 1.6rem;
+            background: rgba(0, 0, 0, 0.2);
+            padding: 10px;
+            border-radius: 10px;
+            text-align: center;
+        }
+        
+        .loading {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 40px;
+            font-size: 1.2rem;
+        }
+        
+        .error {
+            color: #ff6b6b;
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 20px;
+        }
+        
+        .section-title {
+            font-size: 1.8rem;
+            margin: 30px 0 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        @media (max-width: 768px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .heading {
+                font-size: 2rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1 class="heading"><i class="fas fa-heartbeat"></i> Patients Réanimation</h1>
+        </div>
+        
+        <h2 class="section-title">Adultes (14 box)</h2>
+        <div class="grid" id="adultGrid">
+            <div class="loading">
+                <i class="fas fa-spinner fa-spin"></i> Chargement des données...
+            </div>
+        </div>
+        
+        <h2 class="section-title">Enfants (5 box)</h2>
+        <div class="grid" id="childGrid">
+            <div class="loading">
+                <i class="fas fa-spinner fa-spin"></i> Chargement des données...
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const SHEET_ID = "1qP34VnnoJgxTX3rdont0mlpvpzApgmobklKx5soJvio";
+            const GID = "16752480";
+            const API_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&gid=${GID}`;
+            
+            const adultGrid = document.getElementById('adultGrid');
+            const childGrid = document.getElementById('childGrid');
+            
+            // Fonction pour calculer les jours d'hospitalisation
+            function calculateDays(dateStr) {
+                if (!dateStr || typeof dateStr !== 'string') return 0;
+                
+                try {
+                    // Nettoyer la chaîne de date
+                    const cleanDateStr = dateStr.replace(/[^\d/]/g, '');
+                    const parts = cleanDateStr.split('/');
+                    
+                    if (parts.length !== 3) return 0;
+                    
+                    const day = parseInt(parts[0], 10);
+                    const month = parseInt(parts[1], 10) - 1;
+                    const year = parseInt(parts[2], 10);
+                    
+                    if (isNaN(day) || isNaN(month) || isNaN(year)) return 0;
+                    
+                    const admissionDate = new Date(year, month, day);
+                    if (isNaN(admissionDate.getTime())) return 0;
+                    
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+                    
+                    const diffTime = today - admissionDate;
+                    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+                    
+                    return diffDays + 1; // +1 car le jour d'admission compte comme jour 1
+                } catch (e) {
+                    console.error("Erreur de calcul de date:", e);
+                    return 0;
+                }
+            }
+            
+            // Fonction pour créer une carte vide
+            function createEmptyCard(isChild = false) {
+                return `
+                    <div class="patient-card ${isChild ? 'enfant' : ''}">
+                        <div class="box-number">Box ?</div>
+                        <div class="patient-name">-</div>
+                        <div class="hospitalization-days">J ?</div>
+                    </div>
+                `;
+            }
+            
+            // Fonction pour charger les données silencieusement
+            async function loadDataSilently() {
+                try {
+                    const response = await fetch(API_URL);
+                    if (!response.ok) return;
+                    
+                    const text = await response.text();
+                    const json = JSON.parse(text.substring(47).slice(0, -2));
+                    const rows = json.table.rows;
+                    
+                    // Patients adultes (lignes 2 à 15)
+                    let adultHtml = '';
+                    for (let i = 2; i <= 15; i++) {
+                        if (i >= rows.length) {
+                            adultHtml += createEmptyCard();
+                            continue;
+                        }
+                        
+                        const row = rows[i];
+                        if (row.c && row.c.length >= 4) {
+                            const box = row.c[1]?.v || "?";
+                            const name = row.c[2]?.v || "";
+                            const date = row.c[3]?.v || "";
+                            const days = calculateDays(date);
+                            
+                            adultHtml += `
+                                <div class="patient-card">
+                                    <div class="box-number">Box ${box}</div>
+                                    <div class="patient-name">${name}</div>
+                                    <div class="hospitalization-days">J ${days > 0 ? days : "?"}</div>
+                                </div>
+                            `;
+                        } else {
+                            adultHtml += createEmptyCard();
+                        }
+                    }
+                    
+                    // Enfants (lignes 16 à 20)
+                    let childHtml = '';
+                    for (let i = 16; i <= 20; i++) {
+                        if (i >= rows.length) {
+                            childHtml += createEmptyCard(true);
+                            continue;
+                        }
+                        
+                        const row = rows[i];
+                        if (row.c && row.c.length >= 4) {
+                            const box = row.c[1]?.v || "?";
+                            const name = row.c[2]?.v || "";
+                            const date = row.c[3]?.v || "";
+                            const days = calculateDays(date);
+                            
+                            childHtml += `
+                                <div class="patient-card enfant">
+                                    <div class="box-number">Box ${box}</div>
+                                    <div class="patient-name">${name}</div>
+                                    <div class="hospitalization-days">J ${days > 0 ? days : "?"}</div>
+                                </div>
+                            `;
+                        } else {
+                            childHtml += createEmptyCard(true);
+                        }
+                    }
+                    
+                    // Mise à jour en douceur
+                    adultGrid.innerHTML = adultHtml;
+                    childGrid.innerHTML = childHtml;
+                    
+                } catch (error) {
+                    console.error("Erreur silencieuse:", error);
+                }
+            }
+            
+            // Fonction pour le chargement initial
+            async function loadInitialData() {
+                try {
+                    const response = await fetch(API_URL);
+                    if (!response.ok) throw new Error("Erreur de réseau");
+                    
+                    const text = await response.text();
+                    const json = JSON.parse(text.substring(47).slice(0, -2));
+                    const rows = json.table.rows;
+                    
+                    // Patients adultes (lignes 2 à 15)
+                    let adultHtml = '';
+                    for (let i = 2; i <= 15; i++) {
+                        if (i >= rows.length) {
+                            adultHtml += createEmptyCard();
+                            continue;
+                        }
+                        
+                        const row = rows[i];
+                        if (row.c && row.c.length >= 4) {
+                            const box = row.c[1]?.v || "?";
+                            const name = row.c[2]?.v || "";
+                            const date = row.c[3]?.v || "";
+                            const days = calculateDays(date);
+                            
+                            adultHtml += `
+                                <div class="patient-card">
+                                    <div class="box-number">Box ${box}</div>
+                                    <div class="patient-name">${name}</div>
+                                    <div class="hospitalization-days">J ${days > 0 ? days : "?"}</div>
+                                </div>
+                            `;
+                        } else {
+                            adultHtml += createEmptyCard();
+                        }
+                    }
+                    adultGrid.innerHTML = adultHtml;
+                    
+                    // Enfants (lignes 16 à 20)
+                    let childHtml = '';
+                    for (let i = 16; i <= 20; i++) {
+                        if (i >= rows.length) {
+                            childHtml += createEmptyCard(true);
+                            continue;
+                        }
+                        
+                        const row = rows[i];
+                        if (row.c && row.c.length >= 4) {
+                            const box = row.c[1]?.v || "?";
+                            const name = row.c[2]?.v || "";
+                            const date = row.c[3]?.v || "";
+                            const days = calculateDays(date);
+                            
+                            childHtml += `
+                                <div class="patient-card enfant">
+                                    <div class="box-number">Box ${box}</div>
+                                    <div class="patient-name">${name}</div>
+                                    <div class="hospitalization-days">J ${days > 0 ? days : "?"}</div>
+                                </div>
+                            `;
+                        } else {
+                            childHtml += createEmptyCard(true);
+                        }
+                    }
+                    childGrid.innerHTML = childHtml;
+                    
+                } catch (error) {
+                    console.error("Erreur initiale:", error);
+                    adultGrid.innerHTML = '<div class="error"><i class="fas fa-exclamation-triangle"></i> Erreur de chargement des données</div>';
+                    childGrid.innerHTML = '<div class="error"><i class="fas fa-exclamation-triangle"></i> Erreur de chargement des données</div>';
+                }
+            }
+            
+            // Chargement initial
+            loadInitialData();
+            
+            // Rafraîchissement silencieux toutes les 10 secondes
+            setInterval(loadDataSilently, 10000);
+        });
+    </script>
+</body>
+</html>
